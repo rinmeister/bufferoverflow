@@ -89,7 +89,7 @@ s.send(payload)
 # doorspeelt aan het OS en de replies weer terugstuurt.
 # De handler maakt gebruik van de select module die op OS niveau wacht op
 # input. De input van select bestaat uit 3 lists (input, output en
-# error/exception). De inp[ut is een list van boodscahppen die via de socket
+# error/exception). De input is een list van boodschappen die via de socket
 # binnenkomen en standardinput die op de commandline binnenkomt. Dit laatste
 # zijn commands die op de cli gegeven worden. Socket input wordt via sys met write
 # weergegeven, stdin wordt gelezen en via de socket verstuurd.
